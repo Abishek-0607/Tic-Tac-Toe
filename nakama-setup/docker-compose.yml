@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: nakama-postgres
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: localdb
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nakama:
+    image: heroiclabs/nakama:3.22.0
+    container_name: nakama
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - "/bin/sh"
+      - "-ecx"
+      - |
+        echo "Waiting for Postgres...";
+        sleep 5;
+        /nakama/nakama migrate up --database.address postgres:localdb@postgres:5432/nakama &&
+        exec /nakama/nakama \
+          --name nakama1 \
+          --database.address postgres:localdb@postgres:5432/nakama \
+          --runtime.path /nakama/data/modules \
+          --runtime.js_entrypoint match.js \
+          --logger.level DEBUG
+    ports:
+      - "7350:7350"
+      - "7351:7351"
+    volumes:
+      - ./modules/build:/nakama/data/modules
+    restart: unless-stopped
+    

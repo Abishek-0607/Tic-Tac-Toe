@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "nakama-runtime": "github:heroiclabs/nakama-common#master",
+    "typescript": "^5.9.3"
+  }
+}
