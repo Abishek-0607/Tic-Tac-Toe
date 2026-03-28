@@ -39,10 +39,20 @@ const Lobby = ({ username, onMatchFound }) => {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center 
       bg-gradient-to-br from-indigo-900 via-purple-900 to-black text-white px-4">
+      <div className="text-center">
+        <h1 className="text-4xl font-bold mb-6 text-white drop-shadow-lg">
+          🎮 Tic Tac Toe
+        </h1>
 
-      <h1 className="text-4xl font-bold mb-6">
-        🎮 Tic Tac Toe
-      </h1>
+        <div className="inline-block px-6 py-2 rounded-full 
+                bg-gradient-to-r from-purple-600 to-blue-500 
+                text-white font-semibold 
+                shadow-lg border border-white/20 
+                transition-all duration-300
+                hover:scale-105 hover:shadow-purple-500/50">
+          👤 {username}
+        </div>
+      </div>
 
       <div className="bg-white/10 backdrop-blur-lg border border-white/20 
         rounded-2xl shadow-xl p-6 w-full max-w-md">

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {toast} from "react-hot-toast";
 import { loginOrRegister } from "../nakama/auth";
-import { connectSocket } from "../nakama/socket";
+import { connectSocket, saveSession } from "../nakama/socket";
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState("");
@@ -9,12 +9,16 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
+    if (!email || !password) {
+      toast.error("Please enter email and password");
+      return;
+    }
+
     try {
       setLoading(true);
-
       const session = await loginOrRegister(email, password);
-      await connectSocket(session);
-
+      
+      toast.success("Login successful!");
       onLogin(session);
     } catch (err) {
       toast.error("❌ Login failed");
@@ -23,7 +27,7 @@ export default function Login({ onLogin }) {
       setLoading(false);
     }
   };
-
+  
   return (
     <div className="login-container">
       {/* Background Grid */}

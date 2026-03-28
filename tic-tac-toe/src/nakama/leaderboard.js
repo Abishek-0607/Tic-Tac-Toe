@@ -10,16 +10,15 @@ export const fetchLeaderboard = async () => {
   }
 
   try {
-    const result = await client.listLeaderboardRecords(
-      session,
-      "global_leaderboard",
-      null,
-      10 // top 10 players
-    );
+    const res= await client.rpc(session, "get_leaderboard_with_stats", "");
 
-    console.log("🏆 Leaderboard:", result.records);
+    const result =
+      typeof res.payload === "string"
+        ? JSON.parse(res.payload)
+        : res.payload;
+    console.log("🏆 Leaderboard:", result);
 
-    return result.records;
+    return result;
   } catch (err) {
     console.error("❌ Leaderboard fetch failed:", err);
     return [];

@@ -18,13 +18,18 @@ const Leaderboard = ({ leaderboard = [], myUserId }) => {
                 : ""
             }`}
           >
-            <span className="font-semibold">
-              #{index + 1} {player.username || "Unknown"}
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-lg font-bold text-yellow-400">
+                #{player.rank}
+              </span>
+              <span>{player.username || "Unknown"}</span>
+            </div>
 
-            <span className="text-green-300 font-bold">
-              {player.score} wins
-            </span>
+            <div className="flex gap-4 text-sm">
+              <span>🏆 {player.wins}</span>
+              <span>❌ {player.losses}</span>
+              <span>🔥 {player.winStreak}</span>
+            </div>
           </div>
         ))}
 

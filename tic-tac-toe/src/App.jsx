@@ -2,29 +2,72 @@ import { Toaster } from "react-hot-toast";
 import Login from "./pages/Login";
 import Game from "./pages/Game";
 import { useState, useEffect } from "react";
+import { initClient, restoreSession, connectSocket, getSession } from "./nakama/socket";
 import Lobby from "./pages/Lobby";
-import { getSession, initClient } from "./nakama/socket";
-import { restoreSession, connectSocket } from "./nakama/socket";
+// import Matchmaking from "./pages/MatchMaking";
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(!!getSession());
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [matchId, setMatchId] = useState(null);
-  console.log(matchId);
+
+  // Initialize client and restore session on mount
   useEffect(() => {
-    initClient();
-    const existingSession = restoreSession();
+    const initialize = async () => {
+      try {
+        // Initialize Nakama client
+        initClient();
 
-    if (existingSession) {
-      console.log("♻️ Restoring session...", existingSession);
+        // Try to restore session
+        const restoredSession = restoreSession();
 
-      connectSocket(existingSession);
-    }
+        if (restoredSession) {
+          console.log("Session restored, reconnecting socket...");
+          
+          // Reconnect socket
+          await connectSocket(restoredSession);
+          
+          setIsLoggedIn(true);
+        } else {
+          console.log("No valid session found");
+        }
+      } catch (err) {
+        console.error("Initialization failed:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    initialize();
   }, []);
 
-  if(!isLoggedIn)
-  {
-    return(<Login onLogin={()=> setIsLoggedIn(true)} />)
+  const handleLogin = async (session) => {
+    try {
+      console.log("🎮 Login successful, connecting socket...");
+      
+      // Connect socket with the new session
+      await connectSocket(session);
+      
+      setIsLoggedIn(true);
+      
+    } catch (error) {
+      console.error("❌ Post-login setup failed:", error);
+    }
+  };
+
+  // Show loading screen while initializing
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-900 via-indigo-900 to-blue-900">
+        <div className="text-white text-2xl animate-pulse">Loading...</div>
+      </div>
+    );
   }
+
+  // Show login if not logged in
+  if (!isLoggedIn) {
+    return <Login onLogin={handleLogin} />;
+  }
+
   return (
     <div>
       {/* Global Toaster */}

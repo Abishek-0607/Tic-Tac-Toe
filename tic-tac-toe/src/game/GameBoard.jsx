@@ -167,14 +167,7 @@ const GameBoard = ({ board = [], onCellClick, disabled, myUserId, leaderboard, w
             </div>
 
             {/* Action Buttons */}
-            <div className="flex gap-4 justify-center">
-              <button
-                onClick={() => window.location.reload()}
-                className="px-8 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 font-bold text-lg transition-all transform hover:scale-105 shadow-lg"
-              >
-                🔄 Play Again
-              </button>
-              
+            <div className="flex gap-4 justify-center">              
               <button
                 onClick={() => window.location.reload()}
                 className="px-8 py-3 rounded-xl bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 font-bold text-lg transition-all transform hover:scale-105 shadow-lg"
