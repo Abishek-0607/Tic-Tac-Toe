@@ -10,24 +10,26 @@ function generateUsername() {
 }
 function matchInit(ctx, logger, nk, params) {
     logger.info("🔥 matchInit triggered");
+    logger.info("Params: " + JSON.stringify(params));
     const state = {
         board: Array(9).fill(null),
         players: [],
         turn: 0,
         winner: null,
         joinedCount: 0,
-        turnStartTime: 0, // ← NEW
-        turnTimeLimit: 30 // ← NEW: 30 seconds per turn
+        turnStartTime: 0,
+        turnTimeLimit: 30
     };
     logger.info("🧠 Initial state: " + JSON.stringify(state));
     return {
         state: state,
-        tickRate: 1, // ← Keep at 1 for per-second checks
+        tickRate: 1,
         label: "tic-tac-toe"
     };
 }
 function matchJoinAttempt(ctx, logger, nk, dispatcher, tick, state, presence, metadata) {
     logger.info("👤 matchJoinAttempt: " + presence.userId);
+    // Always accept if less than 2 players
     if (state.players.length >= 2) {
         logger.info("❌ Match full. Rejecting: " + presence.userId);
         return { state, accept: false, rejectMessage: "Match full" };
@@ -36,27 +38,35 @@ function matchJoinAttempt(ctx, logger, nk, dispatcher, tick, state, presence, me
     return { state, accept: true };
 }
 function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
-    logger.info("👥 matchJoin triggered");
+    logger.info("👥 matchJoin triggered - " + presences.length + " presence(s)");
     presences.forEach(p => {
+        logger.info("Processing presence: " + p.userId + " (" + p.username + ")");
+        // Check if player already exists
         let player = state.players.find(pl => pl.userId === p.userId);
         if (!player) {
+            // NEW PLAYER - add them
+            logger.info("➕ Adding NEW player: " + p.userId);
             state.players.push({
                 userId: p.userId,
                 username: p.username
             });
             state.joinedCount += 1;
-            logger.info("✅ New player added: " + p.username);
         }
-        else if (!player.username) {
-            player.username = p.username;
+        else {
+            logger.info("ℹ️ Player already in state: " + p.userId);
         }
     });
+    logger.info("👥 Total players: " + state.players.length);
     logger.info("👥 Players: " + JSON.stringify(state.players));
     logger.info("👥 Joined count: " + state.joinedCount);
+    // Broadcast when BOTH joined
     if (state.joinedCount === 2) {
-        logger.info("🚀 Both players joined → starting timer");
-        state.turnStartTime = Math.floor(Date.now() / 1000); // ← NEW: Start timer
+        logger.info("🚀 Both players joined → starting game & broadcasting");
+        state.turnStartTime = Math.floor(Date.now() / 1000);
         dispatcher.broadcastMessage(1, nk.stringToBinary(JSON.stringify(state)));
+    }
+    else {
+        logger.info("⏳ Waiting for more players... (" + state.joinedCount + "/2)");
     }
     return { state };
 }
@@ -65,11 +75,12 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
     presences.forEach((p) => {
         logger.info("➖ Removing player: " + p.userId);
         state.players = state.players.filter(pl => pl.userId !== p.userId);
+        state.joinedCount = Math.max(0, state.joinedCount - 1);
     });
     logger.info("👥 Remaining players: " + JSON.stringify(state.players));
+    logger.info("👥 Remaining count: " + state.joinedCount);
     return { state };
 }
-// WIN CHECK
 function checkWinner(board) {
     const lines = [
         [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -84,20 +95,17 @@ function checkWinner(board) {
     return null;
 }
 function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
-    // ← NEW: Check for timeout EVERY TICK (every second)
+    // Check for timeout
     if (state.joinedCount === 2 && !state.winner && state.turnStartTime > 0) {
         const currentTime = Math.floor(Date.now() / 1000);
         const elapsed = currentTime - state.turnStartTime;
         if (elapsed >= state.turnTimeLimit) {
-            logger.info("⏰ TIME OUT! Player " + state.turn + " loses their turn");
-            // Auto-forfeit: opponent wins
-            const loserSymbol = state.turn === 0 ? "X" : "O";
+            logger.info("⏰ TIME OUT! Player " + state.turn + " loses");
             const winnerSymbol = state.turn === 0 ? "O" : "X";
             const winnerIndex = state.turn === 0 ? 1 : 0;
             state.winner = winnerSymbol;
-            state.board[0] = "TIMEOUT"; // ← Mark as timeout win
+            state.board[0] = "TIMEOUT";
             logger.info("🏆 Winner (by timeout): " + state.players[winnerIndex].username);
-            // Update leaderboard
             nk.leaderboardRecordWrite(LEADERBOARD_ID, state.players[winnerIndex].userId, state.players[winnerIndex].username, 1, null, null);
             dispatcher.broadcastMessage(1, nk.stringToBinary(JSON.stringify(state)));
             return { state };
@@ -109,7 +117,6 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
     messages.forEach((msg) => {
         try {
             const raw = nk.binaryToString(msg.data);
-            logger.info("📥 Raw message: " + raw);
             const data = JSON.parse(raw);
             const index = data.index;
             if (state.winner) {
@@ -138,8 +145,12 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
             const winner = checkWinner(state.board);
             if (winner) {
                 const winnerIndex = winner === "X" ? 0 : 1;
+                const loserIndex = winnerIndex === 0 ? 1 : 0;
                 const winnerPlayer = state.players[winnerIndex];
+                const loserPlayer = state.players[loserIndex];
                 state.winner = winner;
+                updatePlayerStats(nk, winnerPlayer.userId, winnerPlayer.username, true);
+                updatePlayerStats(nk, loserPlayer.userId, loserPlayer.username, false);
                 logger.info("🏆 Winner: " + winnerPlayer.username);
                 nk.leaderboardRecordWrite(LEADERBOARD_ID, winnerPlayer.userId, winnerPlayer.username, 1, null, null);
             }
@@ -149,8 +160,8 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
             }
             else {
                 state.turn = 1 - state.turn;
-                state.turnStartTime = Math.floor(Date.now() / 1000); // ← NEW: Reset timer for next turn
-                logger.info("🔄 Next turn: " + state.turn + " | Timer reset");
+                state.turnStartTime = Math.floor(Date.now() / 1000);
+                logger.info("🔄 Next turn: " + state.turn);
             }
         }
         catch (err) {
@@ -169,23 +180,21 @@ function matchSignal(ctx, logger, nk, dispatcher, tick, state, data) {
     logger.info("📡 matchSignal received: " + data);
     return { state, data };
 }
-function createMatchRpc(ctx, logger, nk) {
+function createMatchRpc(ctx, logger, nk, payload) {
     const matchId = nk.matchCreate("match", {});
     logger.info("🔥 RPC created match: " + matchId);
     return JSON.stringify({ matchId });
 }
-function afterAuthenticate(ctx, logger, nk, data) {
-    const userId = data.user_id;
+function afterAuthenticate(ctx, logger, nk, session) {
+    const userId = ctx.userId;
     const account = nk.accountGetId(userId);
-    // if username is empty or auto-generated → replace it
     if (!account.user.username || account.user.username.length < 3) {
         const newUsername = generateUsername();
         nk.accountUpdateId(userId, null, null, newUsername, null, null, null);
         logger.info("👤 Username generated: " + newUsername);
     }
-    return data;
+    return session;
 }
-;
 function createLeaderboard(nk, logger) {
     try {
         nk.leaderboardCreate(LEADERBOARD_ID, false, // authoritative
@@ -198,10 +207,84 @@ function createLeaderboard(nk, logger) {
     }
 }
 ;
-function matchmakerMatched(ctx, logger, nk, matchedUsers) {
+function updatePlayerStats(nk, userId, username, isWinner) {
+    const storageKey = {
+        collection: "player_stats",
+        key: "stats",
+        userId: userId
+    };
+    let stats = {
+        wins: 0,
+        losses: 0,
+        winStreak: 0,
+        bestStreak: 0
+    };
+    const records = nk.storageRead([storageKey]);
+    if (records.length > 0) {
+        // ✅ FIX: value is already an object, don't parse it
+        stats = records[0].value;
+    }
+    if (isWinner) {
+        stats.wins += 1;
+        stats.winStreak += 1;
+        stats.bestStreak = Math.max(stats.bestStreak, stats.winStreak);
+        nk.leaderboardRecordWrite(LEADERBOARD_ID, userId, username, stats.wins, null, null);
+    }
+    else {
+        stats.losses += 1;
+        stats.winStreak = 0;
+    }
+    // ✅ FIX: Write the object directly, don't stringify
+    nk.storageWrite([{
+            collection: "player_stats",
+            key: "stats",
+            userId: userId,
+            value: stats
+        }]);
+}
+function getLeaderboardWithStats(ctx, logger, nk, payload) {
+    const records = nk.leaderboardRecordsList("global_leaderboard", null, 10, // top 10 players
+    null, null);
+    const result = records.records.map((record, index) => {
+        const userId = record.ownerId;
+        // fetch stats from storage
+        const storage = nk.storageRead([{
+                collection: "player_stats",
+                key: "stats",
+                userId: userId
+            }]);
+        let stats = {
+            wins: 0,
+            losses: 0,
+            winStreak: 0,
+            bestStreak: 0
+        };
+        if (storage.length > 0) {
+            // ✅ FIX: value is already an object, don't parse it
+            stats = storage[0].value;
+        }
+        return {
+            rank: index + 1,
+            userId: userId,
+            username: record.username,
+            wins: stats.wins,
+            losses: stats.losses,
+            winStreak: stats.winStreak,
+            bestStreak: stats.bestStreak
+        };
+    });
+    return JSON.stringify(result);
+}
+function matchmakerMatched(ctx, logger, nk, matches) {
     logger.info("🔥 Matchmaker matched!");
+    if (matches.length === 0)
+        return null;
+    logger.info("👥 Matched players count: " + matches.length);
+    matches.forEach((m, i) => {
+        logger.info(`Player ${i}: ${m.presence.userId}`);
+    });
     const matchId = nk.matchCreate("match", {});
-    logger.info("Created match: " + matchId);
+    logger.info("🎮 Created match: " + matchId);
     return matchId;
 }
 function InitModule(ctx, logger, nk, initializer) {
@@ -219,6 +302,7 @@ function InitModule(ctx, logger, nk, initializer) {
     initializer.registerAfterAuthenticateDevice(afterAuthenticate);
     initializer.registerAfterAuthenticateEmail(afterAuthenticate);
     initializer.registerMatchmakerMatched(matchmakerMatched);
+    initializer.registerRpc("get_leaderboard_with_stats", getLeaderboardWithStats);
     createLeaderboard(nk, logger);
 }
 globalThis.InitModule = InitModule;

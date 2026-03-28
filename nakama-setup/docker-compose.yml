@@ -18,6 +18,11 @@ services:
 
   nakama:
     image: heroiclabs/nakama:3.22.0
+    command:
+      - "/nakama/nakama"
+      - "--database.address=root@cockroachdb:26257"
+      - "--session.token_expiry_sec=86400"
+      - "--session.refresh_token_expiry_sec=172800"
     container_name: nakama
     depends_on:
       postgres:
