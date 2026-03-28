@@ -1,34 +1,54 @@
 /// <reference path="../node_modules/nakama-runtime/index.d.ts" />
 
-type GameState = {
-  board: (string | null)[];
-  players: string[];
-  turn: number;
-  winner: string | null;
+const LEADERBOARD_ID = "global_leaderboard";
+
+type Player = {
+  userId: string;
+  username: string;
 };
 
-function matchInit(
-  ctx: nkruntime.Context,
-  logger: nkruntime.Logger,
-  nk: nkruntime.Nakama,
-  params: any
-) {
-  logger.info("🔥 matchInit triggered");
+type GameState = {
+  board: (string | null)[];
+  players: Player[];
+  turn: number;
+  winner: string | null;
+  joinedCount: number;
+  turnStartTime: number;
+  turnTimeLimit: number;
+};
 
-  const state: GameState = {
-    board: Array(9).fill(null),
-    players: [],
-    turn: 0,
-    winner: null
-  };
+function generateUsername(): string {
+  const adjectives = ["Fast", "Cool", "Smart", "Brave", "Lucky"];
+  const animals = ["Tiger", "Eagle", "Shark", "Lion", "Wolf"];
 
-  logger.info("🧠 Initial state: " + JSON.stringify(state));
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const animal = animals[Math.floor(Math.random() * animals.length)];
+  const number = Math.floor(Math.random() * 1000);
 
-  return {
-    state: state,
-    tickRate: 1,
-    label: "tic-tac-toe"
-  };
+  return `${adj}${animal}${number}`;
+}
+
+
+function matchInit(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, params: {[key: string]: string}) {
+    logger.info("🔥 matchInit triggered");
+    
+    const state: GameState = {
+        board: Array(9).fill(null),
+        players: [],
+        turn: 0,
+        winner: null,
+        joinedCount: 0,
+        turnStartTime: 0, // ← NEW
+        turnTimeLimit: 30 // ← NEW: 30 seconds per turn
+    };
+
+    logger.info("🧠 Initial state: " + JSON.stringify(state));
+    
+    return {
+        state: state,
+        tickRate: 1, // ← Keep at 1 for per-second checks
+        label: "tic-tac-toe"
+    };
 }
 
 function matchJoinAttempt(
@@ -52,35 +72,34 @@ function matchJoinAttempt(
   return { state, accept: true };
 }
 
-function matchJoin(
-  ctx: nkruntime.Context,
-  logger: nkruntime.Logger,
-  nk: nkruntime.Nakama,
-  dispatcher: nkruntime.MatchDispatcher,
-  tick: number,
-  state: GameState,
-  presences: nkruntime.Presence[]
-) {
-  logger.info("👥 matchJoin triggered");
+function matchJoin(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, dispatcher: nkruntime.MatchDispatcher, tick: number, state: GameState, presences: nkruntime.Presence[]): { state: GameState } | null {
+    logger.info("👥 matchJoin triggered");
 
-  presences.forEach((p) => {
-    logger.info("➕ Adding player: " + p.userId);
+    presences.forEach(p => {
+        let player = state.players.find(pl => pl.userId === p.userId);
+        
+        if (!player) {
+            state.players.push({
+                userId: p.userId,
+                username: p.username
+            });
+            state.joinedCount += 1;
+            logger.info("✅ New player added: " + p.username);
+        } else if (!player.username) {
+            player.username = p.username;
+        }
+    });
 
-    if (!state.players.includes(p.userId)) {
-      state.players.push(p.userId);
+    logger.info("👥 Players: " + JSON.stringify(state.players));
+    logger.info("👥 Joined count: " + state.joinedCount);
+
+    if (state.joinedCount === 2) {
+        logger.info("🚀 Both players joined → starting timer");
+        state.turnStartTime = Math.floor(Date.now() / 1000); // ← NEW: Start timer
+        dispatcher.broadcastMessage(1, nk.stringToBinary(JSON.stringify(state)));
     }
-  });
 
-  logger.info("👥 Current players: " + JSON.stringify(state.players));
-
-  dispatcher.broadcastMessage(
-    1,
-    nk.stringToBinary(JSON.stringify(state))
-  );
-
-  logger.info("📤 Initial state broadcasted");
-
-  return { state };
+    return { state };
 }
 
 function matchLeave(
@@ -96,7 +115,7 @@ function matchLeave(
 
   presences.forEach((p) => {
     logger.info("➖ Removing player: " + p.userId);
-    state.players = state.players.filter(id => id !== p.userId);
+    state.players = state.players.filter(pl => pl.userId !== p.userId);
   });
 
   logger.info("👥 Remaining players: " + JSON.stringify(state.players));
@@ -104,7 +123,7 @@ function matchLeave(
   return { state };
 }
 
-// ✅ WIN CHECK
+// WIN CHECK
 function checkWinner(board: (string | null)[]): string | null {
   const lines = [
     [0,1,2],[3,4,5],[6,7,8],
@@ -121,97 +140,116 @@ function checkWinner(board: (string | null)[]): string | null {
   return null;
 }
 
-function matchLoop(
-  ctx: nkruntime.Context,
-  logger: nkruntime.Logger,
-  nk: nkruntime.Nakama,
-  dispatcher: nkruntime.MatchDispatcher,
-  tick: number,
-  state: GameState,
-  messages: nkruntime.MatchMessage[]
-) {
-  logger.info("🔁 matchLoop tick: " + tick);
-  logger.info("📩 Messages received: " + messages.length);
-
-  if (messages.length === 0) {
-    return { state };
-  }
-
-  messages.forEach((msg) => {
-    try {
-      const raw = nk.binaryToString(msg.data);
-      logger.info("📥 Raw message: " + raw);
-
-      const data = JSON.parse(raw);
-      const index = data.index;
-
-      logger.info("🎯 Move index: " + index);
-      logger.info("👤 Sender: " + msg.sender.userId);
-
-      if (state.winner) {
-        logger.info("⛔ Game already finished");
-        return;
-      }
-
-      if (index < 0 || index > 8) {
-        logger.info("❌ Invalid index");
-        return;
-      }
-
-      if (state.board[index] !== null) {
-        logger.info("❌ Cell already filled");
-        return;
-      }
-
-      const playerIndex = state.players.indexOf(msg.sender.userId);
-
-      logger.info("👤 Player index: " + playerIndex);
-      logger.info("🔄 Current turn: " + state.turn);
-
-      if (playerIndex === -1) {
-        logger.info("❌ Unknown player");
-        return;
-      }
-
-      if (playerIndex !== state.turn) {
-        logger.info("⛔ Not player's turn");
-        return;
-      }
-
-      const symbol = playerIndex === 0 ? "X" : "O";
-
-      logger.info("✏️ Assigning symbol: " + symbol);
-
-      state.board[index] = symbol;
-
-      logger.info("🧩 Board after move: " + JSON.stringify(state.board));
-
-      const winner = checkWinner(state.board);
-
-      if (winner) {
-        state.winner = winner;
-        logger.info("🏆 Winner: " + winner);
-      } else if (!state.board.includes(null)) {
-        state.winner = "DRAW";
-        logger.info("🤝 Draw detected");
-      } else {
-        state.turn = 1 - state.turn;
-        logger.info("🔄 Next turn: " + state.turn);
-      }
-
-    } catch (err) {
-      logger.error("❌ Error processing move: " + err);
+function matchLoop(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, dispatcher: nkruntime.MatchDispatcher, tick: number, state: GameState, messages: nkruntime.MatchMessage[]): { state: GameState } | null {
+    
+    // ← NEW: Check for timeout EVERY TICK (every second)
+    if (state.joinedCount === 2 && !state.winner && state.turnStartTime > 0) {
+        const currentTime = Math.floor(Date.now() / 1000);
+        const elapsed = currentTime - state.turnStartTime;
+        
+        if (elapsed >= state.turnTimeLimit) {
+            logger.info("⏰ TIME OUT! Player " + state.turn + " loses their turn");
+            
+            // Auto-forfeit: opponent wins
+            const loserSymbol = state.turn === 0 ? "X" : "O";
+            const winnerSymbol = state.turn === 0 ? "O" : "X";
+            const winnerIndex = state.turn === 0 ? 1 : 0;
+            
+            state.winner = winnerSymbol;
+            state.board[0] = "TIMEOUT"; // ← Mark as timeout win
+            
+            logger.info("🏆 Winner (by timeout): " + state.players[winnerIndex].username);
+            
+            // Update leaderboard
+            nk.leaderboardRecordWrite(
+                LEADERBOARD_ID,
+                state.players[winnerIndex].userId,
+                state.players[winnerIndex].username,
+                1,
+                null,
+                null
+            );
+            
+            dispatcher.broadcastMessage(1, nk.stringToBinary(JSON.stringify(state)));
+            return { state };
+        }
     }
-  });
 
-  dispatcher.broadcastMessage(
-    1,
-    nk.stringToBinary(JSON.stringify(state))
-  );
+    if (messages.length === 0) {
+        return { state };
+    }
 
-  logger.info("📤 Broadcasting state: " + JSON.stringify(state));
+    messages.forEach((msg) => {
+        try {
+            const raw = nk.binaryToString(msg.data);
+            logger.info("📥 Raw message: " + raw);
+            const data = JSON.parse(raw);
+            const index = data.index;
 
-  return { state };
+            if (state.winner) {
+                logger.info("⛔ Game already finished");
+                return;
+            }
+
+            if (index < 0 || index > 8) {
+                logger.info("❌ Invalid index");
+                return;
+            }
+
+            if (state.board[index] !== null) {
+                logger.info("❌ Cell already filled");
+                return;
+            }
+
+            const playerIndex = state.players.findIndex(pl => pl.userId === msg.sender.userId);
+
+            if (playerIndex === -1) {
+                logger.info("❌ Unknown player");
+                return;
+            }
+
+            if (playerIndex !== state.turn) {
+                logger.info("⛔ Not player's turn");
+                return;
+            }
+
+            const symbol = playerIndex === 0 ? "X" : "O";
+            state.board[index] = symbol;
+
+            const winner = checkWinner(state.board);
+
+            if (winner) {
+                const winnerIndex = winner === "X" ? 0 : 1;
+                const winnerPlayer = state.players[winnerIndex];
+                state.winner = winner;
+                logger.info("🏆 Winner: " + winnerPlayer.username);
+
+                nk.leaderboardRecordWrite(
+                    LEADERBOARD_ID,
+                    winnerPlayer.userId,
+                    winnerPlayer.username,
+                    1,
+                    null,
+                    null
+                );
+            } else if (!state.board.includes(null)) {
+                state.winner = "DRAW";
+                logger.info("🤝 Draw detected");
+            } else {
+                state.turn = 1 - state.turn;
+                state.turnStartTime = Math.floor(Date.now() / 1000); // ← NEW: Reset timer for next turn
+                logger.info("🔄 Next turn: " + state.turn + " | Timer reset");
+            }
+
+        } catch (err) {
+            logger.error("❌ Error processing move: " + err);
+        }
+    });
+
+    logger.info("📤 Broadcasting state");
+    dispatcher.broadcastMessage(1, nk.stringToBinary(JSON.stringify(state)));
+
+    return { state };
 }
 
 function matchTerminate(
@@ -247,6 +285,57 @@ function createMatchRpc(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nk
   return JSON.stringify({ matchId });
 }
 
+function afterAuthenticate (ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, data: any) {
+  const userId = data.user_id;
+
+  const account = nk.accountGetId(userId);
+
+  // if username is empty or auto-generated → replace it
+  if (!account.user.username || account.user.username.length < 3) {
+    const newUsername = generateUsername();
+
+    nk.accountUpdateId(userId, null, null, newUsername, null, null, null);
+
+    logger.info("👤 Username generated: " + newUsername);
+  }
+
+  return data;
+};
+
+function createLeaderboard (nk: nkruntime.Nakama, logger: nkruntime.Logger) {
+  try {
+    nk.leaderboardCreate(
+      LEADERBOARD_ID,
+      false, // authoritative
+      nkruntime.SortOrder.DESCENDING, // high score = more wins
+      nkruntime.Operator.BEST,
+      null,
+      {}
+    );
+
+    logger.info("🏆 Leaderboard created");
+  } catch (err) {
+    logger.info("⚠️ Leaderboard already exists");
+  }
+};
+
+function matchmakerMatched(
+  ctx: nkruntime.Context,
+  logger: nkruntime.Logger,
+  nk: nkruntime.Nakama,
+  matchedUsers: nkruntime.MatchmakerResult[]
+): string {
+
+  logger.info("🔥 Matchmaker matched!");
+
+  const matchId = nk.matchCreate("match", {});
+
+  logger.info("Created match: " + matchId);
+
+  return matchId;
+}
+
+
 function InitModule(
   ctx: nkruntime.Context,
   logger: nkruntime.Logger,
@@ -259,12 +348,17 @@ function InitModule(
     matchInit: matchInit,
     matchJoinAttempt: matchJoinAttempt,
     matchJoin: matchJoin,
-    matchLeave: matchLeave,
+    matchLeave: matchLeave, 
     matchLoop: matchLoop,
     matchTerminate: matchTerminate,
     matchSignal: matchSignal
   });
+
   initializer.registerRpc("create_match_rpc", createMatchRpc);
+  initializer.registerAfterAuthenticateDevice(afterAuthenticate);
+  initializer.registerAfterAuthenticateEmail(afterAuthenticate);
+  initializer.registerMatchmakerMatched(matchmakerMatched);
+  createLeaderboard(nk, logger);
 }
 
 (globalThis as any).InitModule = InitModule;

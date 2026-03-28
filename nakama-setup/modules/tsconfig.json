@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "es2016",
     "lib": ["es2016"],
-    "module": "commonjs",
+    "module": "ESNext",
     "outDir": "./build",
     "rootDir": "./src",
     "strict": false,

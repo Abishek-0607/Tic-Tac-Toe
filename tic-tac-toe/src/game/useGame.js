@@ -1,119 +1,98 @@
-import { useEffect, useState } from "react";
-import { 
-  initClient, 
-  connectSocket, 
-  getSocket, 
-  getClient 
-} from "../nakama/socket";
+import { useEffect, useState, useRef } from "react";
+import { getSocket, getUserId } from "../nakama/socket";
+import { listenToMatch, sendMove, setPresences } from "../nakama/match";
+import { fetchLeaderboard } from "../nakama/leaderboard";
 
-export const useGame = () => {
-  const [board, setBoard] = useState(Array(9).fill(null));
-  const [matchId, setMatchId] = useState(null);
-  const [loading, setLoading] = useState(true);
+const useGame = (matchId) => {
+  const [gameState, setGameState] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const myUserId = getUserId();
+  const setupDone = useRef(false);
+  
+  // Extract string if object is passed
+  const actualMatchId = typeof matchId === 'object' ? matchId?.matchId : matchId;
 
   useEffect(() => {
-    const setup = async () => {
-      try {
-        initClient();
-        const client = getClient();
+    // Reset setupDone when matchId changes
+    setupDone.current = false;
+  }, [actualMatchId]);
 
-        // ✅ AUTH (use email/device as you implemented)
-        const session = await client.authenticateDevice(
-          crypto.randomUUID(),
-          true
-        );
+  useEffect(() => {
+    if (!actualMatchId || setupDone.current) {
+      console.log("⏩ Skipping setup");
+      return;
+    }
 
-        await connectSocket(session);
-        const socket = getSocket();
+    const socket = getSocket();
+    if (!socket) {
+      console.error("❌ Socket missing");
+      return;
+    }
 
-        if (!socket) {
-          console.error("❌ Socket missing");
-          return;
-        }
+    console.log("🔧 Setting up game for match:", actualMatchId);
+    setupDone.current = true;
 
-        // ✅ STEP 1: Check stored matchId
-        let storedMatchId = localStorage.getItem("matchId");
+    listenToMatch(socket, (state) => {
+      console.log("🔥 State Updated:", state);
+      setGameState(state);
+      
+      if (state.players) {
+        console.log("👥 Players in game:", state.players);
+      }
+    });
 
-        // ✅ STEP 2: Validate matchId
-        if (storedMatchId) {
-          try {
-            console.log("🔄 Trying to join existing match:", storedMatchId);
-            await socket.joinMatch(storedMatchId);
-          } catch (err) {
-            console.warn("⚠️ Old match invalid, creating new...");
-            storedMatchId = null;
-            localStorage.removeItem("matchId");
-          }
-        }
-
-        // ✅ STEP 3: Create new match if needed
-        if (!storedMatchId) {
-          const match = await socket.createMatch("match");
-          storedMatchId = match.match_id;
-
-          console.log("🎯 New match created:", storedMatchId);
-
-          await socket.joinMatch(storedMatchId);
-
-          localStorage.setItem("matchId", storedMatchId);
-        }
-
-        setMatchId(storedMatchId);
-
-        // ✅ STEP 4: Listen
-        socket.onmatchdata = (msg) => {
-          try {
-            const decoded = new TextDecoder().decode(msg.data);
-            const state = JSON.parse(decoded);
-
-            console.log("🔥 Match update:", state);
-
-            if (state.board) {
-              setBoard([...state.board]);
-            }
-
-          } catch (err) {
-            console.error("❌ Parse error:", err);
-          }
-        };
-
-        setLoading(false);
-
-      } catch (err) {
-        console.error("❌ Setup failed:", err);
+    socket.onmatchpresence = (presences) => {
+      console.log("👥 Presence update:", presences);
+      
+      if (presences.joins && presences.joins.length > 0) {
+        console.log("➕ Players joined:", presences.joins.length);
+        setPresences(presences.joins);
+      }
+      
+      if (presences.leaves && presences.leaves.length > 0) {
+        console.log("➖ Players left:", presences.leaves.length);
       }
     };
 
-    setup();
-  }, []);
+    return () => {
+      console.log("🧹 Cleaning up listeners only");
+      socket.onmatchdata = () => {};
+      socket.onmatchpresence = () => {};
+    };
+  }, [actualMatchId]);
 
-  // ✅ SEND MOVE
+  useEffect(() => {
+    if (gameState?.winner) {
+      console.log("🏆 Game ended → fetching leaderboard");
+      fetchLeaderboard().then((data) => {
+        setLeaderboard(data);
+      });
+    }
+  }, [gameState?.winner]);
+
   const makeMove = async (index) => {
     const socket = getSocket();
 
-    if (!socket || !matchId) {
+    if (!socket || !actualMatchId) {
       console.log("⏳ Match not ready");
       return;
     }
 
-    try {
-      await socket.sendMatchState(
-        matchId,
-        1,
-        new TextEncoder().encode(JSON.stringify({ index })),
-        [],
-        true
-      );
-
-    } catch (err) {
-      console.error("❌ Send failed:", err);
+    if (!gameState) {
+      console.log("⏳ Game state not loaded");
+      return;
     }
+
+    sendMove(socket, actualMatchId, index);
   };
 
   return {
-    board,
+    gameState,
     makeMove,
-    matchId,
-    loading
+    matchId: actualMatchId,
+    myUserId,
+    leaderboard
   };
 };
+
+export default useGame;

@@ -1,12 +1,11 @@
-// src/nakama/match.js
+import { getSocket } from "./socket";
 
-import { getClient, getSession, getSocket } from "./socket";
-
-// ✅ no global matchId here anymore
 let currentPresences = [];
+let matchDataHandler = null; // Store handler to prevent duplicates
 
 export const setPresences = (presences) => {
   currentPresences = presences;
+  console.log("👥 Presences updated:", presences);
 };
 
 export const createMatch = async () => {
@@ -15,50 +14,93 @@ export const createMatch = async () => {
     console.error("❌ Socket not initialized");
     return null;
   }
-  const response = await socket.rpc("create_match_rpc");
+  
+  try {
+    const response = await socket.rpc("create_match_rpc");
+    const data = JSON.parse(response.payload);
 
-  const data = JSON.parse(response.payload);
-
-  console.log("🎯 Authoritative Match:", data.matchId);
-
-  return data.matchId; // return only
+    console.log("🎯 Match created:", data.matchId);
+    
+    const matchData = await socket.joinMatch(data.matchId);
+    console.log("✅ Match joined:", matchData);
+    
+    return data.matchId; // Return just the matchId
+  } catch (err) {
+    console.error("❌ Match creation failed:", err);
+    return null;
+  }
 };
 
-export const sendMove = async(socket, matchId, index) => {
+export const joinInMatch = async (matchId) => {
+  try {
+    const socket = getSocket();
+    const data = await socket.joinMatch(matchId);
+    console.log("✅ Match Joined:", data);
+    
+    // Update presences when joining
+    if (data.presences) {
+      setPresences(data.presences);
+    }
+    
+    return data;
+  } catch (err) {
+    console.error("❌ Join failed:", err);
+    throw err;
+  }
+};
+
+export const sendMove = async (socket, matchId, index) => {
   if (!socket || !matchId) {
     console.error("❌ Missing socket or matchId");
     return;
   }
+  
   console.log("📤 Sending move:", index);
+  
   socket.sendMatchState(
-      matchId,
-      1,
-      new TextEncoder().encode(JSON.stringify({ index })),
-      currentPresences,
-      true
+    matchId,
+    1, // opcode
+    new TextEncoder().encode(JSON.stringify({ index }))
+    // Don't send presences - server handles broadcast
   );
 };
 
 export const listenToMatch = (socket, callback) => {
-   console.log("👂 Attaching match listener");
+  console.log("👂 Setting up match listener");
+  
   if (!socket) {
     console.error("❌ Socket not available");
     return;
   }
-  
-  socket.onmatchdata = (msg) => {
-    console.log("📩 Raw match data:", msg);
 
-    const decoded = new TextDecoder().decode(msg.data);
-    const parsed = JSON.parse(decoded);
+  // Prevent duplicate listeners
+  if (matchDataHandler) {
+    console.log("⚠️ Replacing existing match listener");
+  }
 
-    console.log("✅ Parsed state:", parsed);
+  matchDataHandler = (msg) => {
+    console.log("📩 Raw match data received:", msg);
 
-    // ✅ Only update if board exists
-    if (parsed.board) {
+    try {
+      const decoded = new TextDecoder().decode(msg.data);
+      const parsed = JSON.parse(decoded);
+
+      console.log("✅ Parsed state:", parsed);
       callback(parsed);
-    } else {
-      console.warn("⚠️ Invalid state received:", parsed);
+    } catch (err) {
+      console.error("❌ Failed to parse match data:", err);
     }
   };
+
+  socket.onmatchdata = matchDataHandler;
+  console.log("✅ Match listener attached");
+};
+
+// Cleanup function
+export const cleanupMatchListener = (socket) => {
+  if (socket) {
+    socket.onmatchdata = () => {};
+    matchDataHandler = null;
+    console.log("🧹 Match listener cleaned up");
+  }
 };
